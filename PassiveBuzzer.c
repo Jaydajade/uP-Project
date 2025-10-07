@@ -1,3 +1,8 @@
+/*// This is the program for makeing the song for when the washing machine is done
+//doing the program
+//the buzzer pin can be changed depend on which pin you plug it
+//
+
 #include <stdint.h>
 #define STM32F411xE
 #include "stm32f4xx.h"
@@ -31,6 +36,8 @@ void beep(uint32_t frequency, uint32_t duration) {
 int main(void) {
     GPIO_Init_Custom();
 
+    //the note better use with 1k up if you gen the chat add the 0 at the
+    //end of the note
        beep(7840, 200);  delay(50);    // G5
        beep(9880, 200);  delay(50);    // B5
        beep(10470, 300); delay(80);    // C6
@@ -58,3 +65,4 @@ int main(void) {
 }
 
 
+*/
