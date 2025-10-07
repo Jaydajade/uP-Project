@@ -42,6 +42,12 @@ static inline uint16_t ADC1_Read(void) {
     return ADC1->DR;
 }
 
+static inline void Display_Off(void) {
+    GPIOC->BSRR = GPIO_BSRR_BR7;
+    GPIOA->BSRR = GPIO_BSRR_BR8 | GPIO_BSRR_BR9;
+    GPIOB->BSRR = GPIO_BSRR_BR10;
+}
+
 int main(void) {
     /* ===== Clocks ===== */
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOCEN;
@@ -55,6 +61,11 @@ int main(void) {
     GPIOB->MODER  &= ~(GPIO_MODER_MODE3 | GPIO_MODER_MODE5);
     GPIOB->PUPDR  &= ~(GPIO_PUPDR_PUPD3 | GPIO_PUPDR_PUPD5);
     GPIOB->PUPDR  |=  (0b01 << GPIO_PUPDR_PUPD3_Pos) | (0b01 << GPIO_PUPDR_PUPD5_Pos);
+
+    /* ===== PB4 button (pull-up) ===== */
+    GPIOB->MODER  &= ~GPIO_MODER_MODE4;
+    GPIOB->PUPDR  &= ~GPIO_PUPDR_PUPD4;
+    GPIOB->PUPDR  |=  (0b01 << GPIO_PUPDR_PUPD4_Pos);
 
     /* ===== LEDs: PA5/6/7 (active-high) ===== */
     GPIOA->MODER   &= ~(GPIO_MODER_MODE5 | GPIO_MODER_MODE6 | GPIO_MODER_MODE7);
@@ -102,6 +113,9 @@ int main(void) {
     uint8_t  pb3_last = 1;
     uint8_t  held_led = 0;        // 0 = none, else 5/6/7
 
+    uint8_t  display_frozen = 0;  // NEW: flag to freeze display at 0
+    uint8_t  pb4_last = 1;
+
     while (1) {
         /* --- PA10: master toggle --- */
         {
@@ -115,7 +129,7 @@ int main(void) {
                     GPIOA->BSRR = GPIO_BSRR_BR5 | GPIO_BSRR_BR6 | GPIO_BSRR_BR7;
                     active_led = 0; held_led = 0;
                     click_count = 0; multi_timer = 0; blink_timer = 0;
-                    // (ถ้ามี 7-seg อยากเคลียร์ก็ทำที่นี่)
+                    display_frozen = 0;  // unfreeze when master off
                 }
                 delay_cycles(DEBOUNCE_DELAY);
             }
@@ -128,23 +142,26 @@ int main(void) {
             active_led = 0; held_led = 0;
             click_count = 0; multi_timer = 0; blink_timer = 0;
 
+            Display_Off();
             /* แสดง 7-seg ได้ตามต้องการ: (ตัวอย่างอ่านทุกลูป) */
-            uint16_t v  = ADC1_Read();
-            uint8_t  num = (uint8_t)((v * 10U) / 4096U);
-            if (num > 9) num = 9;
-            Display_Number(num);
+//            if (!display_frozen) {
+//                uint16_t v  = ADC1_Read();
+//                uint8_t  num = (uint8_t)((v * 10U) / 4096U);
+//                if (num > 9) num = 9;
+//                Display_Number(num);
+//            }
 
             continue;
         }
 
-        /* --- โหมด HOLD: กด PB3 อีกครั้งเพื่อ “ปลด hold → กลับมากระพริบ” --- */
+        /* --- โหมด HOLD: กด PB3 อีกครั้งเพื่อ "ปลด hold → กลับมากระพริบ" --- */
         if (held_led != 0) {
             // ย้ำให้ไฟค้าง
             if (held_led == 5)      GPIOA->BSRR = GPIO_BSRR_BS5;
             else if (held_led == 6) GPIOA->BSRR = GPIO_BSRR_BS6;
             else                    GPIOA->BSRR = GPIO_BSRR_BS7;
 
-            // อนุญาตเฉพาะ PB3 เพื่อ “ปลด hold”
+            // อนุญาตเฉพาะ PB3 เพื่อ "ปลด hold"
             uint8_t btn_pb3 = (GPIOB->IDR & GPIO_IDR_ID3) ? 1 : 0;
             if (pb3_last == 1 && btn_pb3 == 0) {
                 active_led  = held_led;   // กลับมากระพริบดวงเดิม
@@ -155,7 +172,7 @@ int main(void) {
             pb3_last = btn_pb3;
 
             // แสดง 7-seg ได้ตามปกติ
-            {
+            if (!display_frozen) {
                 uint16_t v  = ADC1_Read();
                 uint8_t  num = (uint8_t)((v * 10U) / 4096U);
                 if (num > 9) num = 9;
@@ -171,6 +188,7 @@ int main(void) {
             if (pb5_last == 1 && btn_pb5 == 0) {
                 click_count++;
                 multi_timer = MULTI_WINDOW;
+                display_frozen = 0;  // unfreeze when interacting with LEDs
                 delay_cycles(DEBOUNCE_DELAY);
             }
             pb5_last = btn_pb5;
@@ -216,8 +234,19 @@ int main(void) {
             pb3_last = btn_pb3;
         }
 
-        /* --- 7-seg: อ่าน ADC แล้วโชว์ --- */
+        /* --- PB4 reset number --- */
         {
+            uint8_t btn_pb4 = (GPIOB->IDR & GPIO_IDR_ID4) ? 1 : 0;
+            if (pb4_last == 1 && btn_pb4 == 0) {
+                Display_Number(0);
+                display_frozen = 1;  // freeze display at 0
+                delay_cycles(DEBOUNCE_DELAY);
+            }
+            pb4_last = btn_pb4;
+        }
+
+        /* --- 7-seg: อ่าน ADC แล้วโชว์ (ถ้าไม่ frozen) --- */
+        if (!display_frozen) {
             uint16_t v  = ADC1_Read();
             uint8_t  num = (uint8_t)((v * 10U) / 4096U);
             if (num > 9) num = 9;
